@@ -74,7 +74,7 @@ class QwenSecureE2EEClient:
             
             # 3. 서버 공개키 임포트 및 Shared Secret 유도 (ECDH)
             s_pub_raw = base64.b64decode(server_pub_key)
-            server_pub = server_pub = ECC.import_key(s_pub_raw)
+            server_pub = ECC.import_key(s_pub_raw, curve_name='P-256')
             shared_point = client_key.d * server_pub.point
             # Shared Secret으로부터 32바이트 AES 키 생성
             aes_key = SHA256.new(int(shared_point.x).to_bytes(32, 'big')).digest()
