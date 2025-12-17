@@ -93,7 +93,8 @@ class QwenSecureE2EEClient:
             s_pub_raw = base64.b64decode(server_pub_key)
             server_pub = ECC.import_key(s_pub_raw, curve_name='P-256')
             
-            shared_point = client_key.d * server_pub.point
+            # 수정: .point 대신 .pointQ 사용
+            shared_point = client_key.d * server_pub.pointQ
             aes_key = SHA256.new(int(shared_point.x).to_bytes(32, 'big')).digest()
 
             # 2. 데이터 패키징 및 암호화
