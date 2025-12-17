@@ -4,7 +4,7 @@ Z-Engineer ComfyUI Node
 프롬프트 엔지니어링을 위한 원격 LLM 클라이언트
 """
 
-from .client_node import QwenSimpleClient, NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+from .nodes import QwenSimpleClient, NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 
 # ComfyUI가 인식할 수 있도록 노드 매핑을 최상위로 노출
 __all__ = [
