@@ -11,18 +11,18 @@ from urllib3.util.retry import Retry
 
 class QwenSecureE2EEClient:
     """
-    [Z-Engineer E2EE 클라이언트 - 자동 세션 관리 버전]
-    - 최적화: zlib 압축으로 전송량 절감 및 세션 키 재사용으로 속도 향상
-    - 지능형 리셋: 서버 재시작으로 인한 공개키 변경 시 세션 자동 초기화
-    - 보안: ECC(P-256) 기반 핸드셰이크 및 AES-256-GCM 암호화
+    [Z-Engineer E2EE 클라이언트 - 세션 동기화 강화 버전]
+    - 최적화: zlib 압축 및 AES-256-GCM 보안 통신
+    - 세션 관리: 서버 공개키 변경 감지 시 모든 클래스 변수 자동 리셋
+    - 안정성: 클래스 직접 참조 방식을 통한 인스턴스 간 데이터 파편화 방지
     """
     
-    # 클래스 수준에서 세션 정보 유지
+    # 클래스 수준에서 관리되는 세션 상태 변수
     _shared_key = None
     _client_pub_b64 = None
     _last_key_time = 0
     _key_lifetime = 3600 
-    _current_server_pub_key = "" # 현재 세션에 연결된 서버 공개키 추적용
+    _current_server_pub_key = "" 
     _session = None
 
     @classmethod
@@ -70,38 +70,47 @@ class QwenSecureE2EEClient:
         return cls._session
 
     def send_request(self, api_url, api_key, server_pub_key, system_prompt, prompt, seed, max_tokens, temperature, timeout):
+        # 1. 입력값 정제
         api_url = api_url.strip().rstrip("/")
         api_key = api_key.strip()
         server_pub_key = server_pub_key.strip()
         current_time = time.time()
 
-        # [중요] 서버 공개키가 변경되었는지 확인 (서버 재시작 대응)
-        if self._current_server_pub_key != server_pub_key:
-            print(f"🔄 [Z-Engineer] 서버 키 변경 감지 (또는 최초 연결). 세션을 초기화합니다.")
+        # [중요] 서버 키 변경 감지 로직 - 클래스 변수를 직접 참조하여 리셋
+        if QwenSecureE2EEClient._current_server_pub_key != server_pub_key:
+            print(f"🔄 [Z-Engineer] 서버 공개키 변경 감지. 세션 메모리를 완전히 초기화합니다.")
             QwenSecureE2EEClient._shared_key = None
+            QwenSecureE2EEClient._client_pub_b64 = None
+            QwenSecureE2EEClient._last_key_time = 0
             QwenSecureE2EEClient._current_server_pub_key = server_pub_key
 
         try:
-            # 1. 세션 키가 없거나 만료된 경우 Handshake 수행
-            if (self._shared_key is None or 
-                current_time - self._last_key_time > self._key_lifetime):
+            # 2. 세션 키가 없거나 만료된 경우 신규 핸드셰이크
+            if (QwenSecureE2EEClient._shared_key is None or 
+                current_time - QwenSecureE2EEClient._last_key_time > QwenSecureE2EEClient._key_lifetime):
                 
-                print("🔐 [Z-Engineer] 보안 핸드셰이크를 시작합니다...")
+                print("🔐 [Z-Engineer] 새로운 보안 핸드셰이크를 시작합니다...")
                 client_key = ECC.generate(curve='P-256')
-                client_pub_raw = client_key.public_key().export_key(format='raw')
-                self._client_pub_b64 = base64.b64encode(client_pub_raw).decode('utf-8')
                 
-                # 서버 키 로드
+                # 클라이언트 공개키 클래스 변수에 저장
+                raw_pub = client_key.public_key().export_key(format='raw')
+                QwenSecureE2EEClient._client_pub_b64 = base64.b64encode(raw_pub).decode('utf-8')
+                
+                # 서버 공개키 로드 및 공유 비밀 유도
                 s_pub_raw = base64.b64decode(server_pub_key)
                 server_pub = ECC.import_key(s_pub_raw, curve_name='P-256')
                 
-                # Shared Secret 유도 (.pointQ 사용)
                 shared_point = client_key.d * server_pub.pointQ
-                self._shared_key = SHA256.new(int(shared_point.x).to_bytes(32, 'big')).digest()
-                self._last_key_time = current_time
-                print("✅ [Z-Engineer] 보안 세션이 확립되었습니다.")
+                # 32바이트 AES 키 유도
+                QwenSecureE2EEClient._shared_key = SHA256.new(int(shared_point.x).to_bytes(32, 'big')).digest()
+                QwenSecureE2EEClient._last_key_time = current_time
+                print(f"✅ [Z-Engineer] 보안 세션 확립 완료 (ID: {QwenSecureE2EEClient._client_pub_b64[:12]}...)")
 
-            # 2. 데이터 패키징 및 zlib 압축
+            # 전송에 사용할 최신 세션 정보 확정
+            target_key = QwenSecureE2EEClient._shared_key
+            target_client_id = QwenSecureE2EEClient._client_pub_b64
+
+            # 3. 데이터 압축 및 암호화
             payload_json = json.dumps({
                 "system_prompt": system_prompt,
                 "prompt": prompt,
@@ -111,8 +120,7 @@ class QwenSecureE2EEClient:
             })
             compressed_payload = zlib.compress(payload_json.encode('utf-8'), level=9)
             
-            # 3. AES-256-GCM 암호화
-            cipher_enc = AES.new(self._shared_key, AES.MODE_GCM)
+            cipher_enc = AES.new(target_key, AES.MODE_GCM)
             ciphertext, tag = cipher_enc.encrypt_and_digest(compressed_payload)
             
             # nonce(16) + tag(16) + ciphertext 결합
@@ -122,29 +130,31 @@ class QwenSecureE2EEClient:
             # 4. 서버 전송
             response = self._get_session().post(
                 f"{api_url}/engineer_secure",
-                json={"client_pub": self._client_pub_b64, "data": encrypted_payload},
+                json={"client_pub": target_client_id, "data": encrypted_payload},
                 headers={"X-API-Key": api_key},
                 timeout=timeout
             )
 
             if response.status_code == 200:
-                # 5. 복호화 및 압축 해제
-                res_data = base64.b64decode(response.json()['result'])
-                nonce, tag, ciphertext = res_data[:16], res_data[16:32], res_data[32:]
+                # 5. 응답 복호화 및 압축 해제
+                res_json = response.json()
+                enc_res = base64.b64decode(res_json['result'])
                 
-                cipher_dec = AES.new(self._shared_key, AES.MODE_GCM, nonce=nonce)
-                decrypted_compressed = cipher_dec.decrypt_and_verify(ciphertext, tag)
+                res_nonce, res_tag, res_ciphertext = enc_res[:16], enc_res[16:32], enc_res[32:]
+                cipher_dec = AES.new(target_key, AES.MODE_GCM, nonce=res_nonce)
+                
+                decrypted_compressed = cipher_dec.decrypt_and_verify(res_ciphertext, res_tag)
                 final_text = zlib.decompress(decrypted_compressed).decode('utf-8')
                 
                 return (final_text.strip(),)
             
             else:
-                # 오류 발생 시 세션 키 무효화 (다음 실행 시 재시도 유도)
+                # 서버 에러 발생 시 세션 키 무효화 (동기화 오류 대비)
                 QwenSecureE2EEClient._shared_key = None
-                return (f"❌ 서버 응답 에러 ({response.status_code}): {response.text[:100]}",)
+                return (f"❌ 서버 에러 ({response.status_code}): {response.text[:100]}",)
 
         except Exception as e:
-            # 통신 에러나 MAC 검증 실패 시 키 초기화
+            # MAC 검증 실패 등 예외 발생 시 세션 초기화
             QwenSecureE2EEClient._shared_key = None
             return (f"❌ 보안 통신 에러: {str(e)}",)
 
