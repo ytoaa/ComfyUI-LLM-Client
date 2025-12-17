@@ -1,0 +1,14 @@
+
+# Z-Engineer ComfyUI Node - 필수 패키지
+# ComfyUI/custom_nodes/comfyui-zengineer/requirements.txt
+
+# HTTP 요청 라이브러리 (메인 의존성)
+requests>=2.31.0
+
+# URL 파싱 (Python 표준 라이브러리지만 명시)
+# urllib3는 requests가 자동으로 설치함
+
+# 참고: ComfyUI 자체 의존성은 이미 설치되어 있다고 가정
+# - torch
+# - numpy
+# - PIL/Pillow
