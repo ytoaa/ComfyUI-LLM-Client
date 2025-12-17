@@ -85,8 +85,12 @@ class QwenSecureE2EEClient:
             compressed_data = zlib.compress(payload_json.encode('utf-8'), level=9)
             
             cipher_enc = AES.new(self._shared_key, AES.MODE_GCM)
+            # nonce는 자동으로 생성됨 (16바이트)
             ciphertext, tag = cipher_enc.encrypt_and_digest(compressed_data)
-            encrypted_payload = base64.b64encode(cipher_enc.nonce + tag + ciphertext).decode('utf-8')
+            
+            # 중요: nonce(16) + tag(16) + ciphertext 순서로 결합
+            combined_data = cipher_enc.nonce + tag + ciphertext
+            encrypted_payload = base64.b64encode(combined_data).decode('utf-8')
 
             # 3. 전송
             response = self._get_session().post(
